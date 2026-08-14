@@ -30,6 +30,6 @@
     "zod": "^4.3.11"
   },
   "devDependencies": {
-    "embedded-postgres": "^19.4.0"
+    "embedded-postgres": "18.4.0-beta.17"
   }
 }
