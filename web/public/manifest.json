@@ -1,0 +1,14 @@
+{
+  "name": "EduCenter OS — Education Center Platform",
+  "short_name": "EduCenter",
+  "description": "Multi-tenant SaaS for private education centers: management, teachers, parents, students",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#1a237e",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

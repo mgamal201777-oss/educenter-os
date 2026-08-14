@@ -1,0 +1,35 @@
+{
+  "name": "educenter-os",
+  "version": "1.0.0",
+  "description": "Multi-tenant SaaS platform for private education centers in Egypt — Management Portal + Teacher/Parent/Student PWAs",
+  "main": "server/src/index.js",
+  "scripts": {
+    "start": "node server/src/index.js",
+    "dev": "node server/src/index.js",
+    "db:start": "node scripts/local-db.js start",
+    "db:stop": "node scripts/local-db.js stop",
+    "migrate": "node server/src/migrate.js",
+    "seed": "node server/src/seed.js",
+    "web:dev": "cd web && npm run dev",
+    "web:install": "cd web && npm install",
+    "web:build": "cd web && npm run build",
+    "setup:local": "npm install && npm run web:install && npm run db:start && npm run migrate && npm run seed"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.16.3",
+    "zod": "^4.3.11"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^19.4.0"
+  }
+}

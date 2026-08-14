@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+
+# local embedded postgres data + binaries
+.pgdata/
+
+# environment
+.env
+.env.local
+.env.*.local
+
+# builds
+web/dist/
+dist/
+build/
+
+# logs & OS
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+pgdata-win1252-old/
