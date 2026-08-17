@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { query } = require('../db');
 const { requireRole } = require('../middleware/auth');
-const { tenantScope, audit } = require('../middleware/guards');
+const { tenantScope, audit, assertPlanLimit } = require('../middleware/guards');
 
 router.use(tenantScope);
 
@@ -22,6 +22,8 @@ router.get('/', requireRole('owner', 'admin', 'branch_manager', 'finance', 'rece
 router.post('/', requireRole('owner', 'admin'), async (req, res, next) => {
   try {
     const { name, governorate, city, address, phone, opening_hours } = req.body;
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Branch name is required' });
+    await assertPlanLimit(req.tid, 'branches');
     const { rows } = await query(
       `INSERT INTO branches (tenant_id, name, governorate, city, address, phone, opening_hours)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,

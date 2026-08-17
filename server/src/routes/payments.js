@@ -1,8 +1,10 @@
 const router = require('express').Router();
+const crypto = require('crypto');
 const { query, withTransaction } = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { tenantScope, audit } = require('../middleware/guards');
 const { notifyUser } = require('./notify');
+const { getSettings } = require('../services/channels');
 
 router.use(tenantScope);
 const canRecord = requireRole('owner', 'admin', 'branch_manager', 'reception', 'finance');
@@ -23,6 +25,126 @@ router.get('/', requireRole('owner', 'admin', 'branch_manager', 'reception', 'fi
       FROM payments p JOIN students s ON s.id = p.student_id
       LEFT JOIN users u ON u.id = p.recorded_by
       WHERE ${where.join(' AND ')} ORDER BY p.paid_at DESC, p.id DESC LIMIT 500`, vals);
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+// ---------------------------------------------------------------- online payments (parents)
+
+/** POST /api/payments/pay-request — parent initiates online payment for a fee */
+router.post('/pay-request', async (req, res, next) => {
+  try {
+    if (req.user.role !== 'parent') return res.status(403).json({ error: 'Parents only' });
+    const { fee_id } = req.body || {};
+    const fee = (await query('SELECT * FROM fees WHERE id = $1 AND tenant_id = $2', [fee_id, req.tid])).rows[0];
+    if (!fee) return res.status(404).json({ error: 'Fee not found' });
+    // parent must be a guardian of the student
+    const pid = (await query('SELECT id FROM parents WHERE user_id = $1 AND tenant_id = $2', [req.user.id, req.tid])).rows[0]?.id;
+    const owns = (await query('SELECT 1 FROM student_guardians WHERE parent_id = $1 AND student_id = $2', [pid, fee.student_id])).rows[0];
+    if (!owns) return res.status(403).json({ error: 'Not your child' });
+
+    const paid = (await query(`SELECT COALESCE(sum(amount),0) AS s FROM payments WHERE fee_id = $1 AND status = 'paid'`, [fee_id])).rows[0];
+    const outstanding = Number(fee.total_after_discount) - Number(paid.s);
+    if (outstanding <= 0) return res.status(400).json({ error: 'This fee is already fully paid' });
+
+    const s = await getSettings();
+    const token = crypto.randomBytes(24).toString('hex');
+    const { rows } = await query(
+      `INSERT INTO payment_requests (tenant_id, fee_id, student_id, parent_user_id, amount, provider, token)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [req.tid, fee_id, fee.student_id, req.user.id, outstanding, s.payment_gateway || 'manual', token]);
+
+    let pay_url = null;
+    if ((s.payment_gateway === 'paymob') && s.gateway_api_key && s.gateway_integration_id) {
+      try {
+        const auth = await fetch('https://accept.paymob.com/api/auth/tokens/', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: s.gateway_api_key }),
+        }).then((r) => r.json());
+        const order = await fetch('https://accept.paymob.com/api/ecommerce/orders/', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            auth_token: auth.token, amount_cents: Math.round(outstanding * 100),
+            currency: 'EGP', merchant_order_id: `req_${rows[0].id}`,
+            items: [{ name: fee.fee_type || 'Tuition', amount_cents: Math.round(outstanding * 100), quantity: 1 }],
+          }),
+        }).then((r) => r.json());
+        const bk = await fetch('https://accept.paymob.com/api/acceptance/payment_keys/paymob_pay/', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            auth_token: auth.token, order_id: order.id, amount_cents: Math.round(outstanding * 100),
+            currency: 'EGP', integration_id: Number(s.gateway_integration_id),
+            billing_data: { first_name: req.user.full_name.split(' ')[0], last_name: req.user.full_name.split(' ').slice(-1)[0],
+              email: req.user.email || 'parent@educenter.app', phone_number: req.user.mobile || '+201000000000',
+              apartment: 'NA', floor: 'NA', street: 'NA', building: 'NA', shipping_method: 'NA',
+              postal_code: 'NA', city: 'NA', country: 'EG', state: 'NA' },
+          }),
+        }).then((r) => r.json());
+        pay_url = `https://accept.paymob.com/api/acceptance/iframes/${s.gateway_integration_id}?payment_token=${bk.token}`;
+        await query('UPDATE payment_requests SET provider_ref = $2 WHERE id = $1', [rows[0].id, String(order.id)]);
+      } catch (e) {
+        pay_url = null; // fall back to manual instructions
+      }
+    }
+    res.status(201).json({
+      request: rows[0], pay_url,
+      track_url: `/api/pay/track/${token}`,
+      instructions: s.payment_gateway === 'manual' || !pay_url,
+      wallet_number: s.gateway_wallet_number || null,
+    });
+  } catch (e) { next(e); }
+});
+
+/** GET /api/payments/my-requests — parent's payment request history */
+router.get('/my-requests', async (req, res, next) => {
+  try {
+    if (req.user.role !== 'parent') return res.status(403).json({ error: 'Parents only' });
+    const { rows } = await query(
+      `SELECT pr.*, f.fee_type, st.name AS student_name
+       FROM payment_requests pr JOIN fees f ON f.id = pr.fee_id JOIN students st ON st.id = pr.student_id
+       WHERE pr.parent_user_id = $1 AND pr.tenant_id = $2 ORDER BY pr.created_at DESC LIMIT 50`,
+      [req.user.id, req.tid]);
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+/** POST /api/payments/pay-request/:id/confirm — parent submits transfer/wallet reference (manual gateway) */
+router.post('/pay-request/:id/confirm', async (req, res, next) => {
+  try {
+    if (req.user.role !== 'parent') return res.status(403).json({ error: 'Parents only' });
+    const pr = (await query('SELECT * FROM payment_requests WHERE id = $1 AND tenant_id = $2 AND parent_user_id = $3',
+      [req.params.id, req.tid, req.user.id])).rows[0];
+    if (!pr) return res.status(404).json({ error: 'Payment request not found' });
+    if (pr.status !== 'pending') return res.status(400).json({ error: 'Request already ' + pr.status });
+    const { reference } = req.body || {};
+    if (!reference) return res.status(400).json({ error: 'Transaction reference is required' });
+    const { rows } = await query(
+      `UPDATE payment_requests SET reference = $3, status = 'paid', paid_at = now() WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+      [pr.id, req.tid, reference]);
+    // record as an online payment so finance sees it and can verify
+    const p = await query(
+      `INSERT INTO payments (tenant_id, fee_id, student_id, amount, method, reference, recorded_by, notes, status, paid_at)
+       VALUES ($1,$2,$3,$4,'online',$5,$6,$7,'paid', now()) RETURNING *`,
+      [req.tid, pr.fee_id, pr.student_id, pr.amount, reference, req.user.id,
+       `Parent-submitted via portal. Pay request #${pr.id}`]);
+    await recomputeFeeStatus(pr.fee_id, req.tid);
+    res.json({ request: rows[0], payment: p.rows[0] });
+  } catch (e) { next(e); }
+});
+
+/** GET /api/payments/requests — staff: all online pay requests (for verification) */
+router.get('/requests', canRecord, async (req, res, next) => {
+  try {
+    const { status } = req.query;
+    const where = ['pr.tenant_id = $1'];
+    const vals = [req.tid];
+    if (status) { where.push('pr.status = $2'); vals.push(status); }
+    const { rows } = await query(
+      `SELECT pr.*, f.fee_type, st.name AS student_name, st.student_code, u.full_name AS parent_name
+       FROM payment_requests pr
+       JOIN fees f ON f.id = pr.fee_id JOIN students st ON st.id = pr.student_id
+       LEFT JOIN users u ON u.id = pr.parent_user_id
+       WHERE ${where.join(' AND ')} ORDER BY pr.created_at DESC LIMIT 200`, vals);
     res.json(rows);
   } catch (e) { next(e); }
 });

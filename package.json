@@ -4,7 +4,7 @@
   "description": "Multi-tenant SaaS platform for private education centers in Egypt — Management Portal + Teacher/Parent/Student PWAs",
   "main": "server/src/index.js",
   "scripts": {
-    "start": "node server/src/migrate.js && node server/src/index.js",
+    "start": "node server/src/migrate.js && node server/src/seed.js && node server/src/index.js",
     "dev": "node server/src/index.js",
     "db:start": "node scripts/local-db.js start",
     "db:stop": "node scripts/local-db.js stop",
@@ -26,6 +26,7 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^7.0.9",
     "pg": "^8.16.3",
     "zod": "^4.3.11"
   },

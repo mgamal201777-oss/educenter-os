@@ -2,7 +2,7 @@ const router = require('express').Router();
 const crypto = require('crypto');
 const { query, withTransaction } = require('../db');
 const { requireRole } = require('../middleware/auth');
-const { tenantScope, audit } = require('../middleware/guards');
+const { tenantScope, audit, assertPlanLimit } = require('../middleware/guards');
 
 router.use(tenantScope);
 const bcrypt = require('bcryptjs');
@@ -63,10 +63,15 @@ router.get('/:id', requireRole('owner', 'admin', 'branch_manager', 'finance', 'r
 router.post('/', requireRole('owner', 'admin', 'branch_manager', 'reception'), async (req, res, next) => {
   try {
     const { student, guardians = [], enrollments = [] } = req.body;
+    if (!student || !student.name || !String(student.name).trim()) {
+      return res.status(400).json({ error: 'Student name is required' });
+    }
+    await assertPlanLimit(req.tid, 'students');
     const code = student.student_code || `STU-${Date.now().toString(36).toUpperCase()}`;
     const qr = crypto.randomBytes(24).toString('hex');
 
     const created = await withTransaction(async (client) => {
+      const generatedPasswords = []; // collects auto-generated parent passwords across all guardians
       const s = await client.query(
         `INSERT INTO students (tenant_id, student_code, name, date_of_birth, gender, school_name,
            grade_level_id, curriculum_id, branch_id, previous_level, notes, qr_token)
@@ -86,12 +91,18 @@ router.post('/', requireRole('owner', 'admin', 'branch_manager', 'reception'), a
         } else {
           let userId = null;
           if (g.create_account !== false) {
+            // SECURITY: never use a guessable default password — generate a strong random one
+            // if the staff member did not supply one, and return it once so it can be shared with the parent.
+            const accountPassword = g.password && String(g.password).length >= 8
+              ? g.password
+              : crypto.randomBytes(6).toString('base64url') + 'A1!';
+            if (!g.password) generatedPasswords.push({ parent: g.name, mobile: g.mobile, temp_password: accountPassword });
             const u = await client.query(
               `INSERT INTO users (tenant_id, role, full_name, mobile, username, password_hash, locale)
                VALUES ($1,'parent',$2,$3,$4,$5,'ar') RETURNING id
                ON CONFLICT (mobile) DO UPDATE SET mobile = EXCLUDED.mobile RETURNING id`,
               [req.tid, g.name, g.mobile, `p_${crypto.randomBytes(4).toString('hex')}`,
-               bcrypt.hashSync(g.password || 'parent123', 10)]
+               bcrypt.hashSync(accountPassword, 10)]
             );
             userId = u.rows[0].id;
           }
@@ -135,11 +146,12 @@ router.post('/', requireRole('owner', 'admin', 'branch_manager', 'reception'), a
           }
         }
       }
-      return st;
+      return { student: st, generatedPasswords };
     });
 
-    await audit(req.tid, req.user.id, 'create', 'student', created.id, null, { name: created.name }, req.ip);
-    res.status(201).json(created);
+    await audit(req.tid, req.user.id, 'create', 'student', created.student.id, null, { name: created.student.name }, req.ip);
+    // One-time return of auto-generated parent passwords so staff can share them securely
+    res.status(201).json({ ...created.student, ...(created.generatedPasswords.length ? { generated_parent_passwords: created.generatedPasswords } : {}) });
   } catch (e) { next(e); }
 });
 

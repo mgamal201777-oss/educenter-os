@@ -22,19 +22,22 @@ async function api(method, path, body, token) {
 }
 
 async function main() {
+  const DEMO_PW = process.env.DEMO_PW || 'Edu@Demo-2026';
   console.log('== Auth ==');
-  const owner = await api('POST', '/api/auth/login', { identifier: 'elite-owner', password: '123456' });
-  ok('owner login', owner.status === 200 && owner.json.token);
-  const ownerT = owner.json?.token;
-  const owner2 = await api('POST', '/api/auth/login', { identifier: 'fl-owner', password: '123456' });
-  ok('second tenant owner login', owner2.status === 200);
-  const flT = owner2.json?.token;
-  const bad = await api('POST', '/api/auth/login', { identifier: 'elite-owner', password: 'wrong' });
+  // Client owner accounts are no longer seeded — use finance staff for tenant-scoped checks.
+  // (Create a client admin via the super admin portal to test the owner role.)
+  const staff = await api('POST', '/api/auth/login', { identifier: 'elite-finance', password: DEMO_PW });
+  ok('staff login', staff.status === 200 && staff.json.token);
+  const ownerT = staff.json?.token;
+  const staff2 = await api('POST', '/api/auth/login', { identifier: 'fl-reception', password: DEMO_PW });
+  ok('second tenant staff login', staff2.status === 200);
+  const flT = staff2.json?.token;
+  const bad = await api('POST', '/api/auth/login', { identifier: 'elite-finance', password: 'wrong' });
   ok('wrong password rejected', bad.status === 401);
 
-  // find teacher / parent / student users via DB-ish API (use search as owner)
+  // find teacher / parent / student users via DB-ish API (use search as staff)
   console.log('== Teacher role ==');
-  const teacherLogin = await api('POST', '/api/auth/login', { identifier: 'elite-ahmed.samir', password: '123456' });
+  const teacherLogin = await api('POST', '/api/auth/login', { identifier: 'elite-ahmed.samir', password: DEMO_PW });
   ok('teacher login', teacherLogin.status === 200);
   const teacherT = teacherLogin.json?.token;
   const tToday = await api('GET', '/api/attendance/today', null, teacherT);
@@ -46,7 +49,7 @@ async function main() {
   // parent usernames: par_elite_N
   let parentT = null, parentId = null;
   for (let i = 1; i <= 15; i++) {
-    const r = await api('POST', '/api/auth/login', { identifier: `par_elite_${i}`, password: '123456' });
+    const r = await api('POST', '/api/auth/login', { identifier: `par_elite_${i}`, password: DEMO_PW });
     if (r.status === 200) { parentT = r.json.token; break; }
   }
   ok('parent login', !!parentT);
@@ -69,7 +72,7 @@ async function main() {
   console.log('== Student role ==');
   let studentT = null;
   for (let i = 1; i <= 20; i++) {
-    const r = await api('POST', '/api/auth/login', { identifier: `stu_elite_${i}`, password: '123456' });
+    const r = await api('POST', '/api/auth/login', { identifier: `stu_elite_${i}`, password: DEMO_PW });
     if (r.status === 200) { studentT = r.json.token; break; }
   }
   ok('student login', !!studentT);

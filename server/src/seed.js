@@ -27,15 +27,31 @@ const SCHOOLS = ['El Nasr School', 'Manar El Eman', 'Future International School
   'Mostafa Kamel', 'El Orman School', 'Zahraa Nasr City', 'Abed El Moneim Riad'];
 
 async function main() {
-  console.log('[seed] resetting demo data...');
+  // HARD GUARD: demo seed must NEVER run against production, no exceptions.
+  if (process.env.NODE_ENV === 'production') {
+    console.log('[seed] NODE_ENV=production — demo seed permanently disabled');
+    await pool.end();
+    process.exit(0);
+  }
+  // Local dev safety: never wipe a non-empty local DB unless explicitly forced
+  const existing = await pool.query('SELECT 1 FROM users LIMIT 1').catch(() => null);
+  if (existing && existing.rowCount > 0 && process.env.SEED_FORCE !== 'true') {
+    console.log('[seed] data already present — skipping (set SEED_FORCE=true to reseed locally)');
+    await pool.end();
+    return;
+  }
+    console.log('[seed] resetting demo data...');
   await pool.query('TRUNCATE tenants CASCADE');
 
-  const H = bcrypt.hashSync('123456', 10);
+  // Strong platform credentials (super admin) — demo staff/student accounts use a separate demo password
+  const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'Edu@a14ba1536f23!2026';
+  const H = bcrypt.hashSync('Edu@Demo-2026', 10);
 
   // ============ PLATFORM ============
   const superAdmin = await pool.query(
     `INSERT INTO users (role, full_name, email, username, password_hash, locale)
-     VALUES ('super_admin','Platform Admin','admin@educenter.app','superadmin',$1,'en') RETURNING id`, [H]);
+     VALUES ('super_admin','Platform Admin','admin@educenter.app','superadmin',$1,'en') RETURNING id`,
+    [bcrypt.hashSync(SUPER_ADMIN_PASSWORD, 12)]);
 
   // ============ TENANT 1: النخبة التعليمية (Nasr City + Maadi) ============
   const t1 = (await pool.query(
@@ -48,13 +64,11 @@ async function main() {
     `INSERT INTO tenants (name, slug, plan, status, contact_name, contact_phone, contact_email, settings)
      VALUES ('Future Leaders Learning Center','future-leaders','standard','active','Nashwa Selim','01112223334','hello@futureleaders.edu.eg',
        '{"currency":"EGP","locale":"ar"}') RETURNING id`)).rows[0].id;
-  global.t1 = t1; global.t2 = t2;
+    global.t1 = t1; global.t2 = t2;
 
-  await pool.query(
-    `INSERT INTO users (tenant_id, role, full_name, email, username, password_hash, locale)
-     VALUES ($1,'owner','مروان عبد العزيز','owner@elite.edu.eg','elite-owner',$2,'ar'),
-            ($3,'owner','Nashwa Selim','owner@futureleaders.edu.eg','fl-owner',$2,'ar')`,
-    [t1, H, t2]);
+  // NOTE: no client/tenant owner accounts are seeded.
+  // Client admins are created manually from the super admin portal
+  // (Tenants -> Create center) as a real-world verification test.
 
   const staff = async (tenant, role, name, email, username, branchId) =>
     (await pool.query(

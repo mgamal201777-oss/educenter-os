@@ -56,4 +56,20 @@ router.post('/register', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+/** GET /api/public/payment-track/:token — public status of a parent pay request */
+router.get('/payment-track/:token', async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT pr.token, pr.amount, pr.status, pr.created_at, pr.paid_at,
+              f.fee_type, st.name AS student_name, t.name AS center_name
+       FROM payment_requests pr
+       JOIN fees f ON f.id = pr.fee_id
+       JOIN students st ON st.id = pr.student_id
+       JOIN tenants t ON t.id = pr.tenant_id
+       WHERE pr.token = $1`, [req.params.token]);
+    if (!rows[0]) return res.status(404).json({ error: 'Payment request not found' });
+    res.json(rows[0]);
+  } catch (e) { next(e); }
+});
+
 module.exports = router;
